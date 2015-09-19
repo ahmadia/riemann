@@ -46,8 +46,8 @@ import time
 
 num_eqn = 3
 
-#@numba.jit(nopython=False)
-def euler_roe_1D(q_l,q_l0, q_l1, q_l2, q_r, q_r0, q_r1, q_r2,delta, aux_l,aux_r,gamma1, efix):
+@numba.jit(nopython=False)
+def euler_roe_1D(q_l,q_l0, q_l1, q_l2, q_r, q_r0, q_r1, q_r2,delta, aux_l, aux_r, gamma1, efix):
     r"""
     Roe Euler solver in 1d
 
@@ -61,6 +61,32 @@ def euler_roe_1D(q_l,q_l0, q_l1, q_l2, q_r, q_r0, q_r1, q_r2,delta, aux_l,aux_r,
     :Version: 1.0 (2009-6-26)
     """
 
+    # Entropy fix
+    if efix:
+        raise NotImplementedError("Entropy fix has not been implemented!")
+
+    return euler_roe_1D_kernel(q_l,q_l0, q_l1, q_l2, q_r0, q_r1, q_r2,delta, gamma1, efix)
+
+@numba.jit(nopython=True)
+def euler_roe_1D_kernel(q_l,q_l0, q_l1, q_l2, q_r0, q_r1, q_r2,delta, gamma1, efix):
+    r"""
+    Roe Euler solver in 1d
+
+    *aug_global* should contain -
+     - *gamma* - (float) Ratio of the heat capacities
+     - *gamma1* - (float) :math:`1 - \gamma`
+     - *efix* - (bool) Whether to use an entropy fix or not
+
+    See :ref:`pyclaw_rp` for more details.
+
+    :Version: 1.0 (2009-6-26)
+    """
+
+    # Entropy fix
+    if efix:
+        raise NotImplementedError("Entropy fix has not been implemented!")
+
+
     # Problem dimensions
     num_rp = q_l.shape[1]
     num_waves = 3
@@ -71,62 +97,33 @@ def euler_roe_1D(q_l,q_l0, q_l1, q_l2, q_r, q_r0, q_r1, q_r2,delta, aux_l,aux_r,
     amdq = np.zeros( (num_eqn, num_rp) )
     apdq = np.zeros( (num_eqn, num_rp) )
 
-    # Solver parameters
-    #gamma1 = problem_data['gamma1']
-
-    # Calculate Roe averages
-    #q_l = np.linspace(1, 1000, 15009).reshape(3, 5003)
-    #q_l[0,:] = np.require(q_l[0,:], requirements=['C'])
-    #q_l[1,:] = np.require(q_l[1,:], requirements=['C'])
-    #q_l[2,:] = np.require(q_l[2,:], requirements=['C'])
-    #q_l = np.require(q_l, requirements=['C'])
-    #q_l = np.ascontiguousarray(q_l)
-    #q_r[0,:] = np.require(q_r[0,:], requirements=['C'])
-    #q_r[1,:] = np.require(q_r[1,:], requirements=['C'])
-    #q_r[2,:] = np.require(q_r[2,:], requirements=['C'])
-    #q_r = np.require(q_r, requirements=['C'])
-    #q_r = np.ascontiguousarray(q_r)
-
-    t1 = time.time()
-    u, a, enthalpy = roe_averages(q_l0, q_l1, q_l2,q_r0, q_r1, q_r2,gamma1)[0:3]
-    roe_time = time.time() - t1
-    # Find eigenvector coefficients
-    #delta = q_r - q_l
+    u, a, enthalpy, ignore1, ignore2 = roe_averages(q_l0, q_l1, q_l2, q_r0, q_r1, q_r2, gamma1)
 
     a2 = gamma1 / a**2 * ((enthalpy -u**2)*delta[0,:] + u*delta[1,:] - delta[2,:])
-
-    #logging.info('contiguous = ' + str(a2.flags.contiguous))
-    #logging.info('c_contiguous = ' + str(a2.flags.c_contiguous))
-    #logging.info('f_contiguous = ' + str(a2.flags.f_contiguous))
-
-    #sys.exit()
 
     a3 = (delta[1,:] + (a-u) * delta[0,:] - a*a2) / (2.0*a)
     a1 = delta[0,:] - a2 - a3
 
     # Compute the waves
-    wave[0,0,:] = a1
-    wave[1,0,:] = a1 * (u-a)
-    wave[2,0,:] = a1 * (enthalpy - u*a)
-    s[0,:] = u - a
+    for i in range(num_rp):
+        wave[0,0,i] = a1[i]
+        wave[1,0,i] = a1[i] * (u[i]-a[i])
+        wave[2,0,i] = a1[i] * (enthalpy[i] - u[i] * a[i])
+        s[0,i] = u[i] - a[i]
 
-    wave[0,1,:] = a2
-    wave[1,1,:] = a2 * u
-    wave[2,1,:] = a2 * 0.5 * u**2
-    s[1,:] = u
+        wave[0,1,i] = a2[i]
+        wave[1,1,i] = a2[i] * u[i]
+        wave[2,1,i] = a2[i] * 0.5 * u[i]**2
+        s[1,i] = u[i]
 
-    wave[0,2,:] = a3
-    wave[1,2,:] = a3 * (u+a)
-    wave[2,2,:] = a3 * (enthalpy + u*a)
-    s[2,:] = u + a
+        wave[0,2,i] = a3[i]
+        wave[1,2,i] = a3[i] * (u[i]+a[i])
+        wave[2,2,i] = a3[i] * (enthalpy[i] + u[i] * a[i])
+        s[2,i] = u[i] + a[i]
 
-    # Entropy fix
-    if efix:
-        raise NotImplementedError("Entropy fix has not been implemented!")
-    else:
-        godunov_update(num_rp, num_eqn, num_waves, amdq, apdq, wave, s)
+    godunov_update(num_rp, num_eqn, num_waves, amdq, apdq, wave, s)
+    return wave, s, amdq, apdq
 
-    return wave, s, amdq, apdq, roe_time
 
 @numba.jit(nopython=True)
 def godunov_update(num_rp, num_eqn, num_waves, amdq, apdq, wave, s):
@@ -231,10 +228,6 @@ def euler_exact_1D(q_l,q_r,aux_l,aux_r,problem_data):
     
     """
     raise NotImplementedError("The exact Riemann solver has not been implemented.")
-
-
-def roe_averages(q_l,q_r,problem_data):
-    return roe_averages(q_l, q_r, problem_data['gamma1'])
 
 @numba.jit(nopython=True)
 def roe_averages(q_l0, q_l1, q_l2,q_r0, q_r1, q_r2,gamma1):
